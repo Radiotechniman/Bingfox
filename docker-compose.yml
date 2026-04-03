@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  bingfox:
+    # Use the pre-built image from Docker Hub (replace <your-username> with yours)
+    image: <your-username>/bingfox:latest
+    # Or build locally from source (comment out 'image' above and uncomment this):
+    # build: .
+    container_name: bingfox
+    restart: unless-stopped
+    # Required for the scanner to access the host's ARP table and subnet
+    network_mode: host
+    environment:
+      # Because network_mode: host is used, traditional port mapping (ports: - 80:3001) doesn't work.
+      # Simply change the PORT variable below to change which port Bingfox listens on on your host.
+      - PORT=3001
+    volumes:
+      - ./bingfox/data.db:/app/data.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10mb"
+        max-file: "3"

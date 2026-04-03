@@ -1,0 +1,22 @@
+# Database & Data
+data.db
+bingfox/
+*.db-journal
+*.log
+
+# Temporary Files
+test.json
+test.js
+tmp_script
+
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Frontend Build
+frontend/dist/
+
+# OS/Editor specific
+.DS_Store
+.vscode/
+.idea/
