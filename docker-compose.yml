@@ -3,7 +3,7 @@ version: '3.8'
 services:
   bingfox:
     # Use the pre-built image from Docker Hub (replace <your-username> with yours)
-    image: <your-username>/bingfox:latest
+    image: radiotechniman/bingfox:latest
     # Or build locally from source (comment out 'image' above and uncomment this):
     # build: .
     container_name: bingfox
