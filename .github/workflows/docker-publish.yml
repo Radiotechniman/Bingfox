@@ -8,8 +8,8 @@ on:
 
 
 env:
-  # Replace with your Docker Hub username
-  DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+  # Docker Hub username (Hardcoded for debugging login)
+  DOCKER_HUB_USERNAME: radiotechniman
   IMAGE_NAME: bingfox
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          username: radiotechniman
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
