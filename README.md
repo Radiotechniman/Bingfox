@@ -46,7 +46,7 @@ chmod +x start_bingfox_daemon.sh
 - **Logs**: Check `bingfox.log` for status updates.
 - **Stop**: Use `pkill -f server.js` or the PID provided by the script.
 
-### 4. Run with Docker (Recommended)
+### 4. Run with Docker (Work in progress)
 This is the easiest way to deploy Bingfox persistently. 
 
 > [!IMPORTANT]
