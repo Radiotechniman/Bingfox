@@ -3,6 +3,7 @@ const Database = require('better-sqlite3');
 const cors = require('cors');
 const { exec } = require('child_process');
 const util = require('util');
+const os = require('os');
 const ping = require('ping');
 const path = require('path');
 const net = require('net');
@@ -329,6 +330,22 @@ async function scanNetwork() {
   } catch (err) {
     console.error('[Scanner] Error running ip neigh command:', err.message);
   }
+
+  Object.values(os.networkInterfaces()).flat().forEach(networkInterface => {
+    if (
+      !networkInterface ||
+      networkInterface.internal ||
+      (networkInterface.family !== 'IPv4' && networkInterface.family !== 4) ||
+      !networkInterface.address.startsWith(`${subnetSetting}.`) ||
+      !/^(?:[a-fA-F0-9]{2}:){5}[a-fA-F0-9]{2}$/.test(networkInterface.mac) ||
+      networkInterface.mac === '00:00:00:00:00:00'
+    ) {
+      return;
+    }
+
+    arpMap[networkInterface.address] = networkInterface.mac.toLowerCase();
+    activeIpsSet.add(networkInterface.address);
+  });
 
   Object.keys(arpMap).forEach(ip => {
     if (ip.startsWith(`${subnetSetting}.`)) {
