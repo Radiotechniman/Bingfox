@@ -53,13 +53,15 @@ This is the easiest way to deploy Bingfox persistently.
 > To allow the scanner to access your local network, **`network_mode: host`** is used in the configuration. This ensures the container can see your host's subnet and ARP table.
 
 ```bash
-# Build and start the container in the background
-docker compose up -d
+# Build the image and start/recreate the container
+docker build -t bingfox .
+docker compose up -d --force-recreate
 ```
 
-- **Dashbaord**: `http://localhost:3001`
-- **Data**: Global settings and device data are persisted in `./bingfox/data.db`.
-- **Change Port**: To use a different port, edit the `PORT` variable in `docker-compose.yml`.
+- **Dashboard**: `http://localhost:3099` (the port is configured in `docker-compose.yml`).
+- **Data**: Device data is persisted in `./bingfox/data/`.
+- **Change Port**: Change `PORT` in the Compose environment section and recreate the container with `docker compose up -d --force-recreate`.
+- The Dockerfile clones the GitHub repository while building. Push changes to GitHub before building if you want them included in the image.
 
 ## 🚀 Powered by Vibecode
 

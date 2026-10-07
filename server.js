@@ -32,7 +32,8 @@ db.exec(`
     main_ip TEXT,
     missed_pings INTEGER DEFAULT 0,
     vendor TEXT,
-    last_online_transition INTEGER
+    last_online_transition INTEGER,
+    track_history INTEGER NOT NULL DEFAULT 1
   );
 
   CREATE TABLE IF NOT EXISTS device_ips (
@@ -49,6 +50,8 @@ db.exec(`
     timestamp INTEGER
   );
 
+  CREATE INDEX IF NOT EXISTS idx_device_logs_mac_timestamp ON device_logs (mac, timestamp, id);
+
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -62,6 +65,7 @@ try { db.exec('ALTER TABLE devices ADD COLUMN main_ip TEXT'); } catch (e) {}
 try { db.exec('ALTER TABLE devices ADD COLUMN missed_pings INTEGER DEFAULT 0'); } catch (e) {}
 try { db.exec('ALTER TABLE devices ADD COLUMN vendor TEXT'); } catch (e) {}
 try { db.exec('ALTER TABLE devices ADD COLUMN last_online_transition INTEGER'); } catch (e) {}
+try { db.exec('ALTER TABLE devices ADD COLUMN track_history INTEGER NOT NULL DEFAULT 1'); } catch (e) {}
 
 // Migrate: set last_online_transition to last_seen for currently active devices if NULL
 try {
@@ -137,13 +141,33 @@ app.get('/api/devices', (req, res) => {
 
 app.put('/api/devices/:mac', (req, res) => {
   const { mac } = req.params;
-  const { name, type, network_mode, custom_port, main_ip } = req.body;
-  const stmt = db.prepare(`
-    UPDATE devices 
-    SET name = ?, type = ?, network_mode = ?, custom_port = ?, main_ip = ? 
-    WHERE mac = ?
-  `);
-  stmt.run(name || '', type || '', network_mode || 'DHCP', custom_port || null, main_ip || null, mac);
+  const { name, type, network_mode, custom_port, main_ip, track_history } = req.body;
+  const current = db.prepare('SELECT track_history, is_active FROM devices WHERE mac = ?').get(mac);
+  if (!current) return res.status(404).json({ error: 'Device not found' });
+
+  if (track_history !== undefined && ![true, false, 0, 1].includes(track_history)) {
+    return res.status(400).json({ error: 'Invalid track_history value' });
+  }
+
+  const nextTrackHistory = track_history === undefined ? current.track_history : Number(Boolean(track_history));
+  const updateTx = db.transaction(() => {
+    db.prepare(`
+      UPDATE devices
+      SET name = ?, type = ?, network_mode = ?, custom_port = ?, main_ip = ?, track_history = ?
+      WHERE mac = ?
+    `).run(name || '', type || '', network_mode || 'DHCP', custom_port || null, main_ip || null, nextTrackHistory, mac);
+
+    if (current.track_history !== nextTrackHistory) {
+      const now = Date.now();
+      db.prepare('INSERT INTO device_logs (mac, status, timestamp) VALUES (?, ?, ?)')
+        .run(mac, nextTrackHistory ? 'tracking_resumed' : 'tracking_paused', now);
+      if (nextTrackHistory) {
+        db.prepare('INSERT INTO device_logs (mac, status, timestamp) VALUES (?, ?, ?)')
+          .run(mac, current.is_active ? 'online' : 'offline', now);
+      }
+    }
+  });
+  updateTx();
   res.json({ success: true });
 });
 
@@ -191,6 +215,31 @@ app.get('/api/devices/:mac/logs', (req, res) => {
   const { mac } = req.params;
   const logs = db.prepare('SELECT * FROM device_logs WHERE mac = ? ORDER BY timestamp DESC LIMIT 50').all(mac);
   res.json(logs);
+});
+
+app.get('/api/devices/:mac/history', (req, res) => {
+  const { mac } = req.params;
+  const from = Number(req.query.from);
+  const to = Number(req.query.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    return res.status(400).json({ error: 'Valid from and to timestamps are required' });
+  }
+
+  const device = db.prepare('SELECT track_history, is_active, first_seen FROM devices WHERE mac = ?').get(mac);
+  if (!device) return res.status(404).json({ error: 'Device not found' });
+
+  const previous = db.prepare(`
+    SELECT id, status, timestamp FROM device_logs
+    WHERE mac = ? AND timestamp < ?
+    ORDER BY timestamp DESC, id DESC LIMIT 1
+  `).get(mac, from);
+  const events = db.prepare(`
+    SELECT id, status, timestamp FROM device_logs
+    WHERE mac = ? AND timestamp >= ? AND timestamp < ?
+    ORDER BY timestamp ASC, id ASC
+  `).all(mac, from, to);
+
+  res.json({ ...device, events: previous ? [previous, ...events] : events });
 });
 
 app.get('/api/settings', (req, res) => {
@@ -250,7 +299,14 @@ async function scanNetwork() {
       const ip = `${subnetSetting}.${j}`;
       promises.push(ping.promise.probe(ip, { timeout: 1 }));
     }
-    const results = await Promise.all(promises);
+    let results;
+    try {
+      results = await Promise.all(promises);
+    } catch (err) {
+      console.error('[Scanner] Ping probe failed:', err.message);
+      scanStatus = { active: false, progress: 0 };
+      return;
+    }
     results.filter(r => r.alive).forEach(r => activeIpsSet.add(r.host));
     
     scanStatus.progress = Math.round((end / 254) * 80); // 80% for pinging
@@ -301,7 +357,7 @@ async function scanNetwork() {
     db.prepare('UPDATE devices SET missed_pings = missed_pings + 1 WHERE missed_pings <= 50').run();
     
     // Log offline status for those crossing the 5-ping threshold
-    const becameOffline = db.prepare('SELECT mac FROM devices WHERE missed_pings = 6 AND is_active = 1').all();
+    const becameOffline = db.prepare('SELECT mac FROM devices WHERE missed_pings = 6 AND is_active = 1 AND track_history = 1').all();
     becameOffline.forEach(d => {
       db.prepare('INSERT INTO device_logs (mac, status, timestamp) VALUES (?, ?, ?)').run(d.mac, 'offline', now);
     });
@@ -323,7 +379,8 @@ async function scanNetwork() {
     `);
 
     const logStatusChange = (mac, newStatus) => {
-      const old = db.prepare('SELECT is_active FROM devices WHERE mac = ?').get(mac);
+      const old = db.prepare('SELECT is_active, track_history FROM devices WHERE mac = ?').get(mac);
+      if (old && !old.track_history) return;
       const oldStatus = old ? (old.is_active ? 'online' : 'offline') : 'new';
       if (oldStatus !== newStatus) {
         db.prepare('INSERT INTO device_logs (mac, status, timestamp) VALUES (?, ?, ?)').run(mac, newStatus, now);
@@ -358,6 +415,8 @@ async function scanNetwork() {
                 custom_port = COALESCE(custom_port, ?)
               WHERE mac = ?
             `).run(placeholder.name || '', placeholder.type || '', placeholder.network_mode || 'DHCP', placeholder.custom_port || null, mac);
+
+            db.prepare('UPDATE device_logs SET mac = ? WHERE mac = ?').run(mac, `unknown-${ip}`);
             
             // Now safe to remove the placeholder
             db.prepare('DELETE FROM devices WHERE mac = ?').run(`unknown-${ip}`);

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
-import { Network, Settings, Search, Edit2, RotateCcw, Trash2, Power, Clock, Download, ChevronRight, Laptop, Smartphone, Tv, HardDrive, Zap, Printer, Camera, Monitor, ShieldCheck, Activity } from 'lucide-react';
+import { Network, Settings, Search, Edit2, RotateCcw, Trash2, Power, Clock, Download, ChevronLeft, ChevronRight, Laptop, Smartphone, Tv, HardDrive, Zap, Printer, Camera, Monitor, ShieldCheck, Activity } from 'lucide-react';
 import './App.css';
 
 function App() {
@@ -32,7 +32,14 @@ function App() {
   const [editingDevice, setEditingDevice] = useState(null);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [activeLogsDevice, setActiveLogsDevice] = useState(null);
-  const [deviceLogs, setDeviceLogs] = useState([]);
+  const [deviceHistory, setDeviceHistory] = useState(null);
+  const [historyView, setHistoryView] = useState('matrix');
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyMonth, setHistoryMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [historySelection, setHistorySelection] = useState(() => new Date());
   const [scanStatus, setScanStatus] = useState({ active: false, progress: 0 });
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'auto');
   const [isWindowMobile, setIsWindowMobile] = useState(window.innerWidth < 768);
@@ -143,6 +150,116 @@ function App() {
     return result;
   }, [devices, searchQuery, sortConfig, columnFilters]);
 
+  const historyCalendar = useMemo(() => {
+    const firstDay = new Date(historyMonth.getFullYear(), historyMonth.getMonth(), 1);
+    const daysInMonth = new Date(historyMonth.getFullYear(), historyMonth.getMonth() + 1, 0).getDate();
+    const offset = (firstDay.getDay() + 6) % 7;
+    const events = deviceHistory?.events || [];
+    let eventIndex = 0;
+    let currentStatus = 'unknown';
+    const days = [];
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = new Date(historyMonth.getFullYear(), historyMonth.getMonth(), day);
+      const dayStart = date.getTime();
+      const dayEnd = new Date(historyMonth.getFullYear(), historyMonth.getMonth(), day + 1).getTime();
+      const statuses = new Set();
+      let hasUnknownPeriod = currentStatus === 'unknown';
+      if (currentStatus !== 'unknown') statuses.add(currentStatus);
+
+      while (eventIndex < events.length && events[eventIndex].timestamp < dayEnd) {
+        const event = events[eventIndex];
+        if (event.status === 'online' || event.status === 'offline') {
+          currentStatus = event.status;
+          if (event.timestamp >= dayStart) statuses.add(currentStatus);
+        } else {
+          currentStatus = 'unknown';
+          hasUnknownPeriod = true;
+        }
+        eventIndex++;
+      }
+
+      let status = 'unknown';
+      if (statuses.has('online') && statuses.has('offline')) status = 'mixed';
+      else if (statuses.size && hasUnknownPeriod) status = 'partial';
+      else if (statuses.size) status = statuses.has('online') ? 'online' : 'offline';
+      days.push({ date, status });
+    }
+
+    return [...Array(offset).fill(null), ...days];
+  }, [deviceHistory, historyMonth]);
+
+  const historyMatrix = useMemo(() => {
+    const monthStart = new Date(historyMonth.getFullYear(), historyMonth.getMonth(), 1).getTime();
+    const monthEnd = new Date(historyMonth.getFullYear(), historyMonth.getMonth() + 1, 1).getTime();
+    const now = Date.now();
+    const intervals = [];
+    const getStatus = (eventStatus) => (
+      eventStatus === 'online' || eventStatus === 'offline' ? eventStatus : 'unknown'
+    );
+    let currentStatus = 'unknown';
+    let cursor = monthStart;
+
+    for (const event of deviceHistory?.events || []) {
+      const timestamp = Number(event.timestamp);
+      if (!Number.isFinite(timestamp)) continue;
+      if (timestamp < monthStart) {
+        currentStatus = getStatus(event.status);
+        continue;
+      }
+      if (timestamp >= monthEnd || timestamp > now) break;
+      if (timestamp > cursor) intervals.push({ start: cursor, end: timestamp, status: currentStatus });
+      currentStatus = getStatus(event.status);
+      cursor = Math.max(cursor, timestamp);
+    }
+
+    const knownEnd = Math.max(monthStart, Math.min(now, monthEnd));
+    if (knownEnd > cursor) intervals.push({ start: cursor, end: knownEnd, status: currentStatus });
+    const unknownStart = Math.max(cursor, knownEnd);
+    if (monthEnd > unknownStart) intervals.push({ start: unknownStart, end: monthEnd, status: 'unknown' });
+
+    const daysInMonth = new Date(historyMonth.getFullYear(), historyMonth.getMonth() + 1, 0).getDate();
+    let intervalIndex = 0;
+    return Array.from({ length: daysInMonth }, (_, dayIndex) => {
+      const date = new Date(historyMonth.getFullYear(), historyMonth.getMonth(), dayIndex + 1);
+      const hours = Array.from({ length: 24 }, (_, hour) => {
+        const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour).getTime();
+        const end = new Date(date.getFullYear(), date.getMonth(), date.getDate(), hour + 1).getTime();
+        const slotDuration = end - start;
+        const durations = { online: 0, offline: 0, unknown: 0 };
+        const segments = [];
+
+        while (intervalIndex < intervals.length && intervals[intervalIndex].end <= start) intervalIndex++;
+        for (let i = intervalIndex; i < intervals.length && intervals[i].start < end; i++) {
+          const interval = intervals[i];
+          const segmentStart = Math.max(start, interval.start);
+          const segmentEnd = Math.min(end, interval.end);
+          if (segmentEnd <= segmentStart) continue;
+          const duration = segmentEnd - segmentStart;
+          durations[interval.status] += duration;
+          const previous = segments[segments.length - 1];
+          if (previous && previous.status === interval.status && previous.end === segmentStart) {
+            previous.end = segmentEnd;
+            previous.duration += duration;
+          } else {
+            segments.push({ start: segmentStart, end: segmentEnd, status: interval.status, duration });
+          }
+        }
+
+        const hasOnline = durations.online > 0;
+        const hasOffline = durations.offline > 0;
+        const hasUnknown = durations.unknown > 0 || slotDuration <= 0;
+        let status = 'unknown';
+        if (hasOnline && hasOffline) status = 'mixed';
+        else if ((hasOnline || hasOffline) && hasUnknown) status = 'partial';
+        else if (hasOnline) status = 'online';
+        else if (hasOffline) status = 'offline';
+        return { start, end, status, segments, slotDuration };
+      });
+      return { date, hours };
+    });
+  }, [deviceHistory, historyMonth]);
+
   const handleBulkDelete = async () => {
     if (selectedDevices.size === 0) return;
     if (!window.confirm(`Are you sure you want to delete ${selectedDevices.size} selected devices?`)) return;
@@ -182,7 +299,8 @@ function App() {
       type: formData.get('type'),
       network_mode: formData.get('network_mode'),
       custom_port: formData.get('custom_port') ? parseInt(formData.get('custom_port'), 10) : null,
-      main_ip: formData.get('main_ip')
+      main_ip: formData.get('main_ip'),
+      track_history: formData.get('track_history') === 'on'
     };
     try {
       await axios.put(`/api/devices/${editingDevice.mac}`, updateData);
@@ -269,14 +387,37 @@ function App() {
     }
   };
 
-  const showLogs = async (device) => {
+  const loadDeviceHistory = async (device, month) => {
+    const from = new Date(month.getFullYear(), month.getMonth(), 1).getTime();
+    const to = new Date(month.getFullYear(), month.getMonth() + 1, 1).getTime();
+    setHistoryLoading(true);
     try {
-      const res = await axios.get(`/api/devices/${device.mac}/logs`);
-      setDeviceLogs(res.data);
-      setActiveLogsDevice(device);
-    } catch (err) {
-      console.error('Error fetching logs', err);
+      const res = await axios.get(`/api/devices/${encodeURIComponent(device.mac)}/history`, { params: { from, to } });
+      setDeviceHistory(res.data);
+    } catch {
+      console.error('Error fetching device history');
+      setDeviceHistory(null);
+    } finally {
+      setHistoryLoading(false);
     }
+  };
+
+  const showLogs = (device) => {
+    const now = new Date();
+    const month = new Date(now.getFullYear(), now.getMonth(), 1);
+    setActiveLogsDevice(device);
+    setHistoryMonth(month);
+    setHistorySelection(now);
+    setDeviceHistory(null);
+    loadDeviceHistory(device, month);
+  };
+
+  const changeHistoryMonth = (offset) => {
+    if (!activeLogsDevice || historyLoading) return;
+    const month = new Date(historyMonth.getFullYear(), historyMonth.getMonth() + offset, 1);
+    setHistoryMonth(month);
+    setHistorySelection(month);
+    loadDeviceHistory(activeLogsDevice, month);
   };
 
   return (
@@ -764,6 +905,15 @@ function App() {
                   max="65535"
                 />
               </div>
+              <div className="checkbox-group">
+                <input
+                  id="track-history"
+                  type="checkbox"
+                  name="track_history"
+                  defaultChecked={Boolean(Number(editingDevice.track_history ?? 1))}
+                />
+                <label htmlFor="track-history" style={{margin: 0}}>Track online/offline history</label>
+              </div>
               <div className="modal-actions">
                 <button type="button" className="btn" onClick={() => setEditingDevice(null)}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Save Changes</button>
@@ -775,28 +925,160 @@ function App() {
       {/* History Logs Modal */}
       {activeLogsDevice && (
         <div className="modal-overlay">
-          <div className="glass-panel modal-content">
+          <div className="glass-panel modal-content history-modal-content">
             <div className="modal-header">
-              <h2>History: {activeLogsDevice.name || activeLogsDevice.ip}</h2>
+              <h2>Presence: {activeLogsDevice.name || activeLogsDevice.ip}</h2>
               <button className="close-btn" onClick={() => setActiveLogsDevice(null)}>×</button>
             </div>
-            <div style={{maxHeight: '400px', overflowY: 'auto', padding: '10px'}}>
-              {deviceLogs.length === 0 ? (
-                <p style={{textAlign: 'center', color: 'var(--text-secondary)'}}>No history yet.</p>
-              ) : (
-                <div className="log-list">
-                  {deviceLogs.map(log => (
-                    <div key={log.id} style={{display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderBottom: '1px solid var(--border-color)'}}>
-                      <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
-                        <span className={`status-indicator ${log.status === 'online' ? 'status-active' : 'status-inactive'}`}></span>
-                        <span style={{textTransform: 'capitalize'}}>{log.status}</span>
-                      </div>
-                      <span style={{color: 'var(--text-secondary)', fontSize: '0.85rem'}}>{formatDate(log.timestamp)}</span>
-                    </div>
-                  ))}
+            {deviceHistory && !deviceHistory.track_history && (
+              <p className="history-notice">History tracking is off. Existing records remain available.</p>
+            )}
+            {historyLoading ? (
+              <p className="history-empty">Loading presence history...</p>
+            ) : !deviceHistory ? (
+              <p className="history-empty">Could not load history.</p>
+            ) : (
+              <>
+                <div className="history-calendar-header">
+                  <button className="action-btn" onClick={() => changeHistoryMonth(-1)} disabled={historyLoading} title="Previous month" aria-label="Previous month">
+                    <ChevronLeft size={18} />
+                  </button>
+                  <strong>{historyMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</strong>
+                  <button className="action-btn" onClick={() => changeHistoryMonth(1)} disabled={historyLoading} title="Next month" aria-label="Next month">
+                    <ChevronRight size={18} />
+                  </button>
                 </div>
-              )}
-            </div>
+                <div className="history-view-toggle" role="group" aria-label="History view">
+                  <button type="button" className={`btn btn-sm${historyView === 'matrix' ? ' btn-primary' : ''}`} onClick={() => setHistoryView('matrix')}>
+                    Month matrix
+                  </button>
+                  <button type="button" className={`btn btn-sm${historyView === 'daily' ? ' btn-primary' : ''}`} onClick={() => setHistoryView('daily')}>
+                    Daily calendar
+                  </button>
+                </div>
+                {historyView === 'matrix' ? (
+                  <>
+                    <div className="history-legend">
+                      <span><i className="history-key history-key-connected" /> Connected</span>
+                      <span><i className="history-key history-key-disconnected" /> Disconnected</span>
+                      <span><i className="history-key history-key-mixed" /> Status changed</span>
+                      <span><i className="history-key history-key-unknown" /> No data</span>
+                    </div>
+                    <div className="history-matrix-scroll">
+                      <div className="history-matrix" style={{ '--days-in-month': historyMatrix.length }}>
+                        <div className="history-matrix-row history-matrix-header-row">
+                          <span className="history-matrix-corner" aria-hidden="true" />
+                          {historyMatrix.map(day => (
+                            <span key={day.date.toISOString()} className="history-matrix-day">
+                              {day.date.getDate()}
+                            </span>
+                          ))}
+                        </div>
+                        {Array.from({ length: 24 }, (_, hour) => (
+                          <div className="history-matrix-row" key={hour}>
+                            <span className="history-matrix-hour">{`${String(hour).padStart(2, '0')}:00`}</span>
+                            {historyMatrix.map(day => {
+                              const cell = day.hours[hour];
+                              const formatTime = timestamp => new Date(timestamp).toLocaleTimeString([], {
+                                hour: '2-digit', minute: '2-digit', second: '2-digit'
+                              });
+                              const statusLabels = {
+                                online: 'Connected',
+                                offline: 'Disconnected',
+                                unknown: 'No data'
+                              };
+                              const title = [
+                                day.date.toLocaleDateString([], { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }),
+                                `${formatTime(cell.start)}–${formatTime(cell.end)}`,
+                                ...cell.segments.map(segment => `${statusLabels[segment.status]}: ${formatTime(segment.start)}–${formatTime(segment.end)}`)
+                              ].join('\n');
+                              const colors = { online: '#3b82f6', offline: '#64748b', unknown: 'rgba(255, 255, 255, 0.08)' };
+                              let elapsed = 0;
+                              const background = cell.slotDuration > 0 && cell.segments.length
+                                ? `linear-gradient(to right, ${cell.segments.map(segment => {
+                                  const startPercent = (elapsed / cell.slotDuration) * 100;
+                                  elapsed += segment.duration;
+                                  const endPercent = (elapsed / cell.slotDuration) * 100;
+                                  return `${colors[segment.status]} ${startPercent}% ${endPercent}%`;
+                                }).join(', ')})`
+                                : colors.unknown;
+                              return (
+                                <span
+                                  key={day.date.toISOString()}
+                                  role="img"
+                                  className={`history-hour history-hour-${cell.status}`}
+                                  style={{ background }}
+                                  title={title}
+                                  aria-label={title.replaceAll('\n', ', ')}
+                                />
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="history-weekdays" aria-hidden="true">
+                      {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => <span key={day}>{day}</span>)}
+                    </div>
+                    <div className="history-calendar-grid">
+                      {historyCalendar.map((day, index) => day ? (
+                        <button
+                          key={day.date.toISOString()}
+                          className={`history-day history-day-${day.status}${historySelection.toDateString() === day.date.toDateString() ? ' selected' : ''}`}
+                          onClick={() => setHistorySelection(day.date)}
+                          title={`${day.date.toLocaleDateString()}: ${day.status}`}
+                        >
+                          <span>{day.date.getDate()}</span>
+                        </button>
+                      ) : <span key={`empty-${index}`} className="history-day-empty" />)}
+                    </div>
+                    <div className="history-legend">
+                      <span><i className="history-key history-key-online" /> Online</span>
+                      <span><i className="history-key history-key-offline" /> Offline</span>
+                      <span><i className="history-key history-key-unknown" /> No data</span>
+                    </div>
+                    <section className="history-day-details">
+                  <h3>{historySelection.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</h3>
+                  {(() => {
+                    const selectedDay = historyCalendar.find(day => day && day.date.toDateString() === historySelection.toDateString());
+                    const dayStart = new Date(historySelection.getFullYear(), historySelection.getMonth(), historySelection.getDate()).getTime();
+                    const dayEnd = new Date(historySelection.getFullYear(), historySelection.getMonth(), historySelection.getDate() + 1).getTime();
+                    const selectedEvents = deviceHistory.events.filter(event =>
+                      event.timestamp >= dayStart && event.timestamp < dayEnd && (event.status === 'online' || event.status === 'offline')
+                    );
+                    const summary = {
+                      online: 'Online during monitored hours.',
+                      offline: 'Offline during monitored hours.',
+                      mixed: 'Status changed during this day.',
+                      partial: 'Part of this day was not monitored.',
+                      unknown: 'No data for this day.'
+                    }[selectedDay?.status || 'unknown'];
+
+                    return (
+                      <>
+                        <p className="history-day-summary">{summary}</p>
+                        {selectedEvents.length > 0 && (
+                          <div className="history-events">
+                            {selectedEvents.map(event => (
+                              <div key={event.id} className="history-event">
+                                <span className={`status-indicator ${event.status === 'online' ? 'status-active' : 'status-inactive'}`} />
+                                <strong>{event.status}</strong>
+                                <time>{new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                    </section>
+                  </>
+                )}
+              </>
+            )}
             <div className="modal-actions">
               <button className="btn btn-primary" onClick={() => setActiveLogsDevice(null)}>Close</button>
             </div>

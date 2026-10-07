@@ -1,33 +1,26 @@
-# Stage 1: Build the Frontend
-FROM node:18-slim AS frontend-builder
-WORKDIR /app/frontend
-COPY frontend/package*.json ./
-RUN npm install
-COPY frontend/ ./
-RUN npm run build
+FROM node:20-alpine
 
-# Stage 2: Final Backend Image
-FROM node:18-slim
 WORKDIR /app
 
-# Install system dependencies for network scanning
-RUN apt-get update && apt-get install -y \
-    iputils-ping \
-    iproute2 \
-    && rm -rf /var/lib/apt/lists/*
+# 1. Installeer git
+RUN apk add --no-cache git
 
-# Copy backend package.json and install dependencies
-COPY package*.json ./
+# 2. Clone de repository direct in de werkmap (/app)
+RUN git clone https://github.com/Radiotechniman/Bingfox.git .
+
+RUN pwd && ls -la
+
+# 3. Installeer dependencies
 RUN npm install --production
 
-# Copy backend files
-COPY . .
+# 4. Frontend dependencies installeren en compileren naar dist
+RUN cd frontend && npm install && npm run build
 
-# Copy the built frontend from Stage 1
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+# Maak een data map en link data.db naar die map
+RUN mkdir -p /app/data && ln -s /app/data/data.db /app/data.db
 
-# Expose the backend port
+# 5. Open de gewenste poort (pas aan naar wens)
 EXPOSE 3001
 
-# Command to run the application
+# 6. Start de applicatie
 CMD ["node", "server.js"]
