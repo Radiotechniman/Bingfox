@@ -382,7 +382,7 @@ function App() {
     try {
       await axios.post(`/api/devices/${mac}/wake`);
       alert('Wake-on-LAN packet sent!');
-    } catch (err) {
+    } catch {
       alert('Failed to send WoL packet');
     }
   };
