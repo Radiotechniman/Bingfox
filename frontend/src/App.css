@@ -148,6 +148,19 @@ tr:hover {
   max-width: 500px;
 }
 
+.notification-modal-overlay {
+  z-index: 1001;
+}
+
+.notification-modal-overlay[hidden] {
+  display: none;
+}
+
+.notification-modal-content {
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
 .history-modal-content {
   max-width: 1000px;
   max-height: calc(100vh - 32px);
@@ -316,6 +329,17 @@ tr:hover {
   margin: 0 0 12px;
   color: var(--text-secondary);
   font-size: 0.78rem;
+}
+
+.device-notifications-variables {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.device-notifications-variables li + li {
+  margin-top: 4px;
 }
 
 .history-view-toggle {

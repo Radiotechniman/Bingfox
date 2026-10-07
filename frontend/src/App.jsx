@@ -30,6 +30,7 @@ function App() {
   // Modals state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [editingDevice, setEditingDevice] = useState(null);
+  const [isNotificationSettingsOpen, setIsNotificationSettingsOpen] = useState(false);
   const [isAboutOpen, setIsAboutOpen] = useState(false);
   const [activeLogsDevice, setActiveLogsDevice] = useState(null);
   const [deviceHistory, setDeviceHistory] = useState(null);
@@ -308,6 +309,7 @@ function App() {
     try {
       await axios.put(`/api/devices/${editingDevice.mac}`, updateData);
       setEditingDevice(null);
+      setIsNotificationSettingsOpen(false);
       fetchData(); // refresh list
     } catch (err) {
       console.error('Error saving device', err);
@@ -492,7 +494,7 @@ function App() {
                   <div className="card-header">
                     <div className={`status-indicator ${device.missed_pings === 0 ? 'status-active' : (device.missed_pings <= 5 ? 'status-warning' : 'status-inactive')}`}></div>
                     <span className="card-name">{device.name || 'Unknown Device'}</span>
-                    <button className="close-btn" onClick={() => setEditingDevice(device)}><Edit2 size={16} /></button>
+                    <button className="close-btn" onClick={() => { setIsNotificationSettingsOpen(false); setEditingDevice(device); }}><Edit2 size={16} /></button>
                   </div>
                   <div className="card-body">
                     <div className="card-row"><span>IP:</span> <strong>{device.main_ip || device.ip}</strong></div>
@@ -724,7 +726,7 @@ function App() {
 
                     <td>
                       <div className="td-actions">
-                        <button className="action-btn" onClick={() => setEditingDevice(device)} title="Edit"><Edit2 size={16} /></button>
+                        <button className="action-btn" onClick={() => { setIsNotificationSettingsOpen(false); setEditingDevice(device); }} title="Edit"><Edit2 size={16} /></button>
                         <button className="action-btn" onClick={() => showLogs(device)} title="History"><Clock size={16} /></button>
                         {!device.is_active && (
                           <button className="action-btn" onClick={() => wakeDevice(device.mac)} title="Wake on LAN"><Power size={16} /></button>
@@ -834,7 +836,7 @@ function App() {
           <div className="glass-panel modal-content">
             <div className="modal-header">
               <h2>Edit Device</h2>
-              <button className="close-btn" onClick={() => setEditingDevice(null)}>×</button>
+              <button className="close-btn" onClick={() => { setIsNotificationSettingsOpen(false); setEditingDevice(null); }}>×</button>
             </div>
             <form onSubmit={saveDevice}>
               <div className="form-group" style={{marginBottom: '20px'}}>
@@ -917,51 +919,92 @@ function App() {
                 />
                 <label htmlFor="track-history" style={{margin: 0}}>Track online/offline history</label>
               </div>
-              <h3 className="device-notifications-heading">GET notifications</h3>
-              <p className="device-notifications-help">
-                Optional HTTP(S) GET URLs. Placeholders: {'{name}'}, {'{ip}'}, {'{mac}'}, {'{status}'}.
-                Use them in the URL or query string. The status is connected or disconnected.
-              </p>
-              <div className="form-group">
-                <label>Connected URL</label>
-                <input
-                  type="text"
-                  name="notify_connect_url"
-                  className="form-control"
-                  defaultValue={editingDevice.notify_connect_url || ''}
-                  placeholder="https://example.com/hook?device={name}&status={status}"
-                  maxLength="2048"
-                />
-              </div>
-              <div className="form-group">
-                <label>Disconnected URL</label>
-                <input
-                  type="text"
-                  name="notify_disconnect_url"
-                  className="form-control"
-                  defaultValue={editingDevice.notify_disconnect_url || ''}
-                  placeholder="https://example.com/hook?device={name}&status={status}"
-                  maxLength="2048"
-                />
-              </div>
-              <div className="form-group">
-                <label>Disconnect delay (minutes)</label>
-                <input
-                  type="number"
-                  name="disconnect_timeout"
-                  className="form-control"
-                  defaultValue={editingDevice.disconnect_timeout ?? 0}
-                  min="0"
-                  max="10080"
-                  step="1"
-                />
-                <p className="device-notifications-help">
-                  The timer starts after Bingfox marks the device offline. If it reconnects before the delay ends, the notification is cancelled. 0 sends it immediately.
-                </p>
+              <div className="device-notifications-section">
+                <h3 className="device-notifications-heading">GET notifications</h3>
+                <p className="device-notifications-help">Configure GET requests for connect and disconnect events.</p>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setIsNotificationSettingsOpen(true)}
+                >
+                  Open GET settings
+                </button>
               </div>
               <div className="modal-actions">
-                <button type="button" className="btn" onClick={() => setEditingDevice(null)}>Cancel</button>
+                <button type="button" className="btn" onClick={() => { setIsNotificationSettingsOpen(false); setEditingDevice(null); }}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Save Changes</button>
+              </div>
+              <div
+                className="modal-overlay notification-modal-overlay"
+                hidden={!isNotificationSettingsOpen}
+              >
+                <div className="glass-panel modal-content notification-modal-content">
+                  <div className="modal-header">
+                    <h2>GET notifications</h2>
+                    <button
+                      type="button"
+                      className="close-btn"
+                      onClick={() => setIsNotificationSettingsOpen(false)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <p className="device-notifications-help">
+                    Optional HTTP(S) GET URLs. Use these placeholders in the URL or query string:
+                  </p>
+                  <ul className="device-notifications-variables">
+                    <li><code>{'{name}'}</code> — device name</li>
+                    <li><code>{'{ip}'}</code> — device IP address</li>
+                    <li><code>{'{mac}'}</code> — device MAC address</li>
+                    <li><code>{'{status}'}</code> — <code>connected</code> or <code>disconnected</code></li>
+                  </ul>
+                  <div className="form-group">
+                    <label>Connected URL</label>
+                    <input
+                      type="text"
+                      name="notify_connect_url"
+                      className="form-control"
+                      defaultValue={editingDevice.notify_connect_url || ''}
+                      placeholder="https://example.com/hook?device={name}&status={status}"
+                      maxLength="2048"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Disconnected URL</label>
+                    <input
+                      type="text"
+                      name="notify_disconnect_url"
+                      className="form-control"
+                      defaultValue={editingDevice.notify_disconnect_url || ''}
+                      placeholder="https://example.com/hook?device={name}&status={status}"
+                      maxLength="2048"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Disconnect delay (minutes)</label>
+                    <input
+                      type="number"
+                      name="disconnect_timeout"
+                      className="form-control"
+                      defaultValue={editingDevice.disconnect_timeout ?? 0}
+                      min="0"
+                      max="10080"
+                      step="1"
+                    />
+                    <p className="device-notifications-help">
+                      The timer starts after Bingfox marks the device offline. If it reconnects before the delay ends, the notification is cancelled. 0 sends it immediately.
+                    </p>
+                  </div>
+                  <div className="modal-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => setIsNotificationSettingsOpen(false)}
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
               </div>
             </form>
           </div>
