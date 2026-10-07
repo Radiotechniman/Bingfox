@@ -62,6 +62,7 @@ docker compose up -d --force-recreate
 - **Data**: Device data is persisted in `./bingfox/data/`.
 - **Change Port**: Change `PORT` in the Compose environment section and recreate the container with `docker compose up -d --force-recreate`.
 - The Dockerfile clones the GitHub repository while building. Push changes to GitHub before building if you want them included in the image.
+- **Device notifications**: Edit a device to configure optional connected/disconnected HTTP(S) GET URLs. URLs can use `{name}`, `{ip}`, `{mac}`, and `{status}` placeholders. The disconnect delay is in minutes; `0` sends as soon as Bingfox marks the device offline. Apprise API POST endpoints are not supported by this GET-only feature.
 
 ## 🚀 Powered by Vibecode
 

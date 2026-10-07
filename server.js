@@ -2,6 +2,8 @@ const express = require('express');
 const Database = require('better-sqlite3');
 const cors = require('cors');
 const { exec } = require('child_process');
+const http = require('http');
+const https = require('https');
 const util = require('util');
 const os = require('os');
 const ping = require('ping');
@@ -34,7 +36,11 @@ db.exec(`
     missed_pings INTEGER DEFAULT 0,
     vendor TEXT,
     last_online_transition INTEGER,
-    track_history INTEGER NOT NULL DEFAULT 1
+    track_history INTEGER NOT NULL DEFAULT 1,
+    notify_connect_url TEXT,
+    notify_disconnect_url TEXT,
+    disconnect_timeout INTEGER NOT NULL DEFAULT 0,
+    disconnect_notify_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS device_ips (
@@ -67,6 +73,10 @@ try { db.exec('ALTER TABLE devices ADD COLUMN missed_pings INTEGER DEFAULT 0'); 
 try { db.exec('ALTER TABLE devices ADD COLUMN vendor TEXT'); } catch (e) {}
 try { db.exec('ALTER TABLE devices ADD COLUMN last_online_transition INTEGER'); } catch (e) {}
 try { db.exec('ALTER TABLE devices ADD COLUMN track_history INTEGER NOT NULL DEFAULT 1'); } catch (e) {}
+try { db.exec('ALTER TABLE devices ADD COLUMN notify_connect_url TEXT'); } catch (e) {}
+try { db.exec('ALTER TABLE devices ADD COLUMN notify_disconnect_url TEXT'); } catch (e) {}
+try { db.exec('ALTER TABLE devices ADD COLUMN disconnect_timeout INTEGER NOT NULL DEFAULT 0'); } catch (e) {}
+try { db.exec('ALTER TABLE devices ADD COLUMN disconnect_notify_at INTEGER'); } catch (e) {}
 
 // Migrate: set last_online_transition to last_seen for currently active devices if NULL
 try {
@@ -97,6 +107,70 @@ function getVendor(mac) {
   if (!mac) return 'Unknown';
   const prefix = mac.toLowerCase().substring(0, 8);
   return VENDOR_MAP[prefix] || 'Unknown';
+}
+
+const NOTIFICATION_PLACEHOLDER_VALUES = {
+  name: 'Device',
+  ip: '192.0.2.1',
+  mac: '00:00:00:00:00:00',
+  status: 'connected'
+};
+
+function isValidNotificationUrl(template) {
+  try {
+    const testUrl = template.replace(/\{(name|ip|mac|status)\}/g, key =>
+      encodeURIComponent(NOTIFICATION_PLACEHOLDER_VALUES[key.slice(1, -1)])
+    );
+    const parsed = new URL(testUrl);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function sendGetNotification(template, device, status) {
+  const values = {
+    name: device.name || 'Unknown device',
+    ip: device.main_ip || device.ip || '',
+    mac: device.mac,
+    status
+  };
+  const target = template.replace(/\{(name|ip|mac|status)\}/g, key =>
+    encodeURIComponent(values[key.slice(1, -1)])
+  );
+  const url = new URL(target);
+  const client = url.protocol === 'https:' ? https : http;
+  const request = client.get(url, response => {
+    response.resume();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      console.error(`[Notifications] GET ${url.origin} returned HTTP ${response.statusCode}`);
+    }
+  });
+  request.setTimeout(10000, () => request.destroy(new Error('Notification request timed out')));
+  request.on('error', err => {
+    console.error(`[Notifications] GET ${url.origin} failed:`, err.message);
+  });
+}
+
+function processPendingDisconnectNotifications() {
+  const now = Date.now();
+  const due = db.transaction(() => {
+    const notifications = db.prepare(`
+      SELECT mac, name, ip, main_ip, notify_disconnect_url
+      FROM devices
+      WHERE disconnect_notify_at IS NOT NULL
+        AND disconnect_notify_at <= ?
+        AND is_active = 0
+        AND notify_disconnect_url IS NOT NULL
+        AND notify_disconnect_url != ''
+    `).all(now);
+    db.prepare('UPDATE devices SET disconnect_notify_at = NULL WHERE disconnect_notify_at <= ?').run(now);
+    return notifications;
+  })();
+
+  due.forEach(device => {
+    sendGetNotification(device.notify_disconnect_url, device, 'disconnected');
+  });
 }
 
 // One-off migration to update vendors for existing devices
@@ -142,21 +216,48 @@ app.get('/api/devices', (req, res) => {
 
 app.put('/api/devices/:mac', (req, res) => {
   const { mac } = req.params;
-  const { name, type, network_mode, custom_port, main_ip, track_history } = req.body;
-  const current = db.prepare('SELECT track_history, is_active FROM devices WHERE mac = ?').get(mac);
+  const {
+    name, type, network_mode, custom_port, main_ip, track_history,
+    notify_connect_url, notify_disconnect_url, disconnect_timeout
+  } = req.body;
+  const current = db.prepare(`
+    SELECT track_history, is_active, notify_connect_url, notify_disconnect_url, disconnect_timeout
+    FROM devices WHERE mac = ?
+  `).get(mac);
   if (!current) return res.status(404).json({ error: 'Device not found' });
 
   if (track_history !== undefined && ![true, false, 0, 1].includes(track_history)) {
     return res.status(400).json({ error: 'Invalid track_history value' });
   }
 
+  for (const url of [notify_connect_url, notify_disconnect_url]) {
+    if (url !== undefined && (typeof url !== 'string' || url.length > 2048 || (url && !isValidNotificationUrl(url)))) {
+      return res.status(400).json({ error: 'Notification URLs must be valid HTTP or HTTPS URLs, up to 2048 characters' });
+    }
+  }
+  if (
+    disconnect_timeout !== undefined &&
+    (!Number.isInteger(disconnect_timeout) || disconnect_timeout < 0 || disconnect_timeout > 10080)
+  ) {
+    return res.status(400).json({ error: 'Disconnect timeout must be a whole number between 0 and 10080 minutes' });
+  }
+
+  const nextConnectUrl = notify_connect_url === undefined ? current.notify_connect_url || '' : notify_connect_url;
+  const nextDisconnectUrl = notify_disconnect_url === undefined ? current.notify_disconnect_url || '' : notify_disconnect_url;
+  const nextDisconnectTimeout = disconnect_timeout === undefined ? current.disconnect_timeout : disconnect_timeout;
   const nextTrackHistory = track_history === undefined ? current.track_history : Number(Boolean(track_history));
   const updateTx = db.transaction(() => {
     db.prepare(`
       UPDATE devices
-      SET name = ?, type = ?, network_mode = ?, custom_port = ?, main_ip = ?, track_history = ?
+      SET name = ?, type = ?, network_mode = ?, custom_port = ?, main_ip = ?, track_history = ?,
+          notify_connect_url = ?, notify_disconnect_url = ?, disconnect_timeout = ?,
+          disconnect_notify_at = CASE WHEN ? = '' THEN NULL ELSE disconnect_notify_at END
       WHERE mac = ?
-    `).run(name || '', type || '', network_mode || 'DHCP', custom_port || null, main_ip || null, nextTrackHistory, mac);
+    `).run(
+      name || '', type || '', network_mode || 'DHCP', custom_port || null, main_ip || null,
+      nextTrackHistory, nextConnectUrl, nextDisconnectUrl,
+      nextDisconnectTimeout, nextDisconnectUrl, mac
+    );
 
     if (current.track_history !== nextTrackHistory) {
       const now = Date.now();
@@ -369,18 +470,32 @@ async function scanNetwork() {
 
   try {
     const now = Date.now();
+    const activeDeviceMacs = new Set(activeIps.map(ip => arpMap[ip] || `unknown-${ip}`));
     
     // Increment missed pings for everyone at start of scan, but cap at 51
     db.prepare('UPDATE devices SET missed_pings = missed_pings + 1 WHERE missed_pings <= 50').run();
     
     // Log offline status for those crossing the 5-ping threshold
-    const becameOffline = db.prepare('SELECT mac FROM devices WHERE missed_pings = 6 AND is_active = 1 AND track_history = 1').all();
-    becameOffline.forEach(d => {
-      db.prepare('INSERT INTO device_logs (mac, status, timestamp) VALUES (?, ?, ?)').run(d.mac, 'offline', now);
+    const becameOffline = db.prepare(`
+      SELECT mac, name, ip, notify_disconnect_url, disconnect_timeout, track_history
+      FROM devices WHERE missed_pings = 6 AND is_active = 1
+    `).all().filter(device => !activeDeviceMacs.has(device.mac));
+    becameOffline.forEach(device => {
+      if (device.track_history) {
+        db.prepare('INSERT INTO device_logs (mac, status, timestamp) VALUES (?, ?, ?)').run(device.mac, 'offline', now);
+      }
+      const notifyAt = device.notify_disconnect_url
+        ? now + Math.max(0, Number(device.disconnect_timeout) || 0) * 60 * 1000
+        : null;
+      db.prepare('UPDATE devices SET disconnect_notify_at = ? WHERE mac = ?').run(notifyAt, device.mac);
     });
 
     // Only set to inactive if missed more than 5 times
-    db.prepare('UPDATE devices SET is_active = 0 WHERE missed_pings > 5').run();
+    db.prepare('SELECT mac FROM devices WHERE missed_pings > 5 AND is_active = 1').all()
+      .filter(device => !activeDeviceMacs.has(device.mac))
+      .forEach(device => {
+        db.prepare('UPDATE devices SET is_active = 0 WHERE mac = ?').run(device.mac);
+      });
 
     const insertDevice = db.prepare(`
       INSERT INTO devices (mac, ip, first_seen, last_seen, is_active, has_web, missed_pings, vendor, last_online_transition) 
@@ -395,8 +510,21 @@ async function scanNetwork() {
         last_online_transition = CASE WHEN devices.is_active = 0 THEN excluded.last_online_transition ELSE devices.last_online_transition END
     `);
 
-    const logStatusChange = (mac, newStatus) => {
-      const old = db.prepare('SELECT is_active, track_history FROM devices WHERE mac = ?').get(mac);
+    const notificationRequests = [];
+    const logStatusChange = (mac, newStatus, ip, placeholder) => {
+      const old = db.prepare(`
+        SELECT is_active, track_history, name, ip, main_ip, notify_connect_url FROM devices WHERE mac = ?
+      `).get(mac);
+      if (old) db.prepare('UPDATE devices SET disconnect_notify_at = NULL WHERE mac = ?').run(mac);
+
+      const notifyOnConnect = old?.notify_connect_url || placeholder?.notify_connect_url;
+      if ((!old || !old.is_active) && newStatus === 'online' && notifyOnConnect) {
+        notificationRequests.push({
+          template: notifyOnConnect,
+          device: { ...placeholder, ...old, mac, ip: ip || old?.ip },
+          status: 'connected'
+        });
+      }
       if (old && !old.track_history) return;
       const oldStatus = old ? (old.is_active ? 'online' : 'offline') : 'new';
       if (oldStatus !== newStatus) {
@@ -410,10 +538,9 @@ async function scanNetwork() {
         let mac = arpMap[ip];
         
         if (mac) {
-          logStatusChange(mac, 'online');
-          
           // If a real MAC is found, check if we have a placeholder record for this IP
           const placeholder = db.prepare('SELECT * FROM devices WHERE mac = ?').get(`unknown-${ip}`);
+          logStatusChange(mac, 'online', ip, placeholder);
           
           // Insert/Update the peripheral IP record
           db.prepare('INSERT OR REPLACE INTO device_ips (mac, ip, last_seen) VALUES (?, ?, ?)').run(mac, ip, now);
@@ -429,9 +556,16 @@ async function scanNetwork() {
                 name = CASE WHEN (name IS NULL OR name = '') THEN ? ELSE name END,
                 type = CASE WHEN (type IS NULL OR type = '') THEN ? ELSE type END,
                 network_mode = CASE WHEN (network_mode IS NULL OR network_mode = 'DHCP') THEN ? ELSE network_mode END,
-                custom_port = COALESCE(custom_port, ?)
+                custom_port = COALESCE(custom_port, ?),
+                notify_connect_url = COALESCE(NULLIF(notify_connect_url, ''), ?),
+                notify_disconnect_url = COALESCE(NULLIF(notify_disconnect_url, ''), ?),
+                disconnect_timeout = CASE WHEN disconnect_timeout = 0 THEN ? ELSE disconnect_timeout END
               WHERE mac = ?
-            `).run(placeholder.name || '', placeholder.type || '', placeholder.network_mode || 'DHCP', placeholder.custom_port || null, mac);
+            `).run(
+              placeholder.name || '', placeholder.type || '', placeholder.network_mode || 'DHCP',
+              placeholder.custom_port || null, placeholder.notify_connect_url || '',
+              placeholder.notify_disconnect_url || '', placeholder.disconnect_timeout || 0, mac
+            );
 
             db.prepare('UPDATE device_logs SET mac = ? WHERE mac = ?').run(mac, `unknown-${ip}`);
             
@@ -441,6 +575,7 @@ async function scanNetwork() {
         } else {
           // If no MAC is found in ARP, assign a placeholder MAC based on IP
           mac = `unknown-${ip}`;
+          logStatusChange(mac, 'online', ip);
           insertDevice.run(mac, ip, now, now, webStatusMap[ip] || 0, 'Unknown', now);
           // Also track in device_ips
           db.prepare('INSERT OR REPLACE INTO device_ips (mac, ip, last_seen) VALUES (?, ?, ?)').run(mac, ip, now);
@@ -451,6 +586,10 @@ async function scanNetwork() {
     });
 
     const updatedCount = updateTx(activeIps);
+    notificationRequests.forEach(({ template, device, status }) => {
+      sendGetNotification(template, device, status);
+    });
+    processPendingDisconnectNotifications();
     console.log(`[Scanner] Scan complete. Updated ${updatedCount} devices with MACs in database.`);
     scanStatus.active = false;
   } catch (err) {
@@ -461,13 +600,22 @@ async function scanNetwork() {
 
 // Start scanning loop
 let scanInterval;
+let notificationInterval;
 function startScanner() {
   if (scanInterval) clearInterval(scanInterval);
+  if (notificationInterval) clearInterval(notificationInterval);
   const intervalSetting = db.prepare("SELECT value FROM settings WHERE key = 'interval'").get();
   const seconds = parseInt(intervalSetting?.value || '30', 10);
   console.log(`[Scanner] Scheduled to run every ${seconds} seconds.`);
   
   scanInterval = setInterval(scanNetwork, seconds * 1000);
+  notificationInterval = setInterval(() => {
+    try {
+      processPendingDisconnectNotifications();
+    } catch (err) {
+      console.error('[Notifications] Could not process pending disconnect notifications:', err.message);
+    }
+  }, 1000);
   // Run first scan immediately without blocking initialization
   setTimeout(scanNetwork, 1000);
 }

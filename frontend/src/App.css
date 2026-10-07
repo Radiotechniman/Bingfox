@@ -307,6 +307,17 @@ tr:hover {
   cursor: wait;
 }
 
+.device-notifications-heading {
+  margin: 20px 0 6px;
+  font-size: 1rem;
+}
+
+.device-notifications-help {
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
 .history-view-toggle {
   display: flex;
   gap: 8px;

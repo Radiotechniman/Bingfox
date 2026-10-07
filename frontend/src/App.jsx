@@ -300,7 +300,10 @@ function App() {
       network_mode: formData.get('network_mode'),
       custom_port: formData.get('custom_port') ? parseInt(formData.get('custom_port'), 10) : null,
       main_ip: formData.get('main_ip'),
-      track_history: formData.get('track_history') === 'on'
+      track_history: formData.get('track_history') === 'on',
+      notify_connect_url: formData.get('notify_connect_url').trim(),
+      notify_disconnect_url: formData.get('notify_disconnect_url').trim(),
+      disconnect_timeout: parseInt(formData.get('disconnect_timeout') || '0', 10)
     };
     try {
       await axios.put(`/api/devices/${editingDevice.mac}`, updateData);
@@ -913,6 +916,48 @@ function App() {
                   defaultChecked={Boolean(Number(editingDevice.track_history ?? 1))}
                 />
                 <label htmlFor="track-history" style={{margin: 0}}>Track online/offline history</label>
+              </div>
+              <h3 className="device-notifications-heading">GET notifications</h3>
+              <p className="device-notifications-help">
+                Optional HTTP(S) GET URLs. Placeholders: {'{name}'}, {'{ip}'}, {'{mac}'}, {'{status}'}.
+                Use them in the URL or query string. The status is connected or disconnected.
+              </p>
+              <div className="form-group">
+                <label>Connected URL</label>
+                <input
+                  type="text"
+                  name="notify_connect_url"
+                  className="form-control"
+                  defaultValue={editingDevice.notify_connect_url || ''}
+                  placeholder="https://example.com/hook?device={name}&status={status}"
+                  maxLength="2048"
+                />
+              </div>
+              <div className="form-group">
+                <label>Disconnected URL</label>
+                <input
+                  type="text"
+                  name="notify_disconnect_url"
+                  className="form-control"
+                  defaultValue={editingDevice.notify_disconnect_url || ''}
+                  placeholder="https://example.com/hook?device={name}&status={status}"
+                  maxLength="2048"
+                />
+              </div>
+              <div className="form-group">
+                <label>Disconnect delay (minutes)</label>
+                <input
+                  type="number"
+                  name="disconnect_timeout"
+                  className="form-control"
+                  defaultValue={editingDevice.disconnect_timeout ?? 0}
+                  min="0"
+                  max="10080"
+                  step="1"
+                />
+                <p className="device-notifications-help">
+                  The timer starts after Bingfox marks the device offline. If it reconnects before the delay ends, the notification is cancelled. 0 sends it immediately.
+                </p>
               </div>
               <div className="modal-actions">
                 <button type="button" className="btn" onClick={() => setEditingDevice(null)}>Cancel</button>
