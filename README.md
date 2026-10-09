@@ -58,6 +58,33 @@ docker build -t bingfox .
 docker compose up -d --force-recreate
 ```
 
+```yaml
+services:
+  bingfox:
+    image: bingfox
+    container_name: bingfox
+    network_mode: host
+    healthcheck: # this is optional
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3099/api/devices').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s    
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - PORT=3099 # 
+    volumes:
+      - ./bingfox/data/:/app/data/
+    restart: unless-stopped 
+```
+
+
 - **Dashboard**: `http://localhost:3099` (the port is configured in `docker-compose.yml`).
 - **Data**: Device data is persisted in `./bingfox/data/`.
 - **Change Port**: Change `PORT` in the Compose environment section and recreate the container with `docker compose up -d --force-recreate`.
@@ -66,7 +93,11 @@ docker compose up -d --force-recreate
 
 ## 🚀 Powered by Vibecode
 
-This project was built with **Vibecode**, focusing on high performance and a modern, glassmorphic UI.
+This was build for personal use with AI to be used at home with limited "bad actors" there is no security so be carefull when roling this out. 
+I'm not liable ..etc. etc. etc. 
+
+This tool is free for personal use, but if money is to be made (directly or indirectly) I'd like a cut :-)
+Contact me for details
 
 ---
 *Created for local network enthusiasts who want clarity and control over their connected devices.*
