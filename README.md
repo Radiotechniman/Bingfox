@@ -93,7 +93,7 @@ services:
 
 The CPU usage seems to be okay-ish with 12-15% during a run and 65mb of ram use. Comming from NetAllertX with a 1.5GB Ram use this looks to be better. 
 
-
+<img width="488" height="208" alt="Image" src="https://github.com/user-attachments/assets/36733fe1-6dba-43d5-9757-12fcc506f3c0" />
 
 
 ## 🚀 Powered by Vibecode
