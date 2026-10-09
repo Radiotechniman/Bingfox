@@ -55,8 +55,9 @@ This is the easiest way to deploy Bingfox persistently.
 ```bash
 # Build the image and start/recreate the container
 docker build -t bingfox .
-docker compose up -d --force-recreate
 ```
+
+And then docker compose with your favorite docker manager
 
 ```yaml
 services:
