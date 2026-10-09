@@ -91,6 +91,11 @@ services:
 - The Dockerfile clones the GitHub repository while building. Push changes to GitHub before building if you want them included in the image.
 - **Device notifications**: Edit a device to configure optional connected/disconnected HTTP(S) GET URLs. URLs can use `{name}`, `{ip}`, `{mac}`, and `{status}` placeholders. The disconnect delay is in minutes; `0` sends as soon as Bingfox marks the device offline. Apprise API POST endpoints are not supported by this GET-only feature.
 
+The CPU usage seems to be okay-ish with 12-15% during a run and 65mb of ram use. Comming from NetAllertX with a 1.5GB Ram use this looks to be better. 
+
+
+
+
 ## 🚀 Powered by Vibecode
 
 This was build for personal use with AI to be used at home with limited "bad actors" there is no security so be carefull when roling this out. 
