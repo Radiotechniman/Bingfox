@@ -93,6 +93,7 @@ services:
 - **Device notifications**: Edit a device to configure optional connected/disconnected HTTP(S) GET URLs. URLs can use `{name}`, `{ip}`, `{mac}`, and `{status}` placeholders. The disconnect delay is in minutes; `0` sends as soon as Bingfox marks the device offline. Apprise API POST endpoints are not supported by this GET-only feature.
 
 The CPU usage seems to be okay-ish with 12-15% during a run and 65mb of ram use. Comming from NetAllertX with a 1.5GB Ram use this looks to be better. 
+Changing the scanning frequency from 30 seconds to 60 could also help, this has not been tested on lowen hardware, I'm currently running this on my Ugreen NAS (i3), YMMV. 
 
 <img width="488" height="208" alt="Image" src="https://github.com/user-attachments/assets/36733fe1-6dba-43d5-9757-12fcc506f3c0" />
 
